@@ -1,0 +1,83 @@
+{
+  "manifest_version": 1,
+  "id": "blender",
+  "name": "Blender",
+  "version": "0.1.0",
+  "description": "Blender 3D in the browser (linuxserver/blender over KasmVNC), with a persistent /config so scenes, preferences and add-ons survive container recreates — plus the aw-blender MCP, which drives the running Blender from an agent session (scene inspection, arbitrary bpy execution, viewport screenshots, Poly Haven / Sketchfab / Hyper3D / Hunyuan3D asset providers). Ported as-is from the agentic-workspace monolith's aw-custom-blender docker service + aw-blender MCP.",
+  "icon": "bolt",
+  "tier": "container",
+  "requires_ui_refresh": true,
+  "category": "Creative",
+  "publisher": "TekFlox",
+  "resource_estimate": {
+    "cpu": "medium",
+    "memory": "~1 GB",
+    "disk": "~3 GB"
+  },
+  "runtime": {
+    "image": "lscr.io/linuxserver/blender:latest",
+    "port": 3010,
+    "resources": {
+      "cpus": 2,
+      "mem_mb": 4096
+    },
+    "run_flags_needed": [
+      "--shm-size=1g"
+    ],
+    "env": {
+      "CUSTOM_PORT": "3010",
+      "CUSTOM_HTTPS_PORT": "3011",
+      "CUSTOM_WS_PORT": "8092",
+      "PUID": "1000",
+      "PGID": "1000",
+      "TZ": "Etc/UTC"
+    },
+    "volumes": [
+      {
+        "source": "$AW_APP_DATA",
+        "target": "/config",
+        "mode": "rw",
+        "reason": "Blender's HOME inside the image: user preferences, installed add-ons (notably the BlenderMCP add-on the aw-blender MCP talks to), and any .blend saved from the session. The monolith bound ./data/blender-config here for the same reason — without it every container recreate (app update, workspace redeploy) resets Blender to a fresh install and the MCP add-on has to be re-installed by hand."
+      }
+    ]
+  },
+  "permissions": [
+    "containers:manage",
+    "fs:workspace-data"
+  ],
+  "contributes": {
+    "windows": [
+      {
+        "id": "blender.main",
+        "title": "Blender",
+        "icon": "bolt",
+        "body": {
+          "type": "managed_app",
+          "kind": "web",
+          "path": "/"
+        }
+      }
+    ],
+    "skills": [
+      {
+        "id": "aw-blender",
+        "path": "skills/aw-blender/SKILL.md",
+        "description": "Drive the workspace's headless-GUI Blender from an agent session over the aw-blender MCP — add-on setup, the tool surface, and the hard-won pipeline lessons (getting files out of the container, baking transforms before export, per-call exec scope)."
+      }
+    ]
+  },
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "auto_start": {
+        "type": "boolean",
+        "default": true,
+        "title": "Auto-start",
+        "description": "Start the Blender container when the workspace starts."
+      }
+    },
+    "required": []
+  },
+  "dependencies": {},
+  "migrations": {}
+}
