@@ -2,8 +2,8 @@
   "manifest_version": 1,
   "id": "blender",
   "name": "Blender",
-  "version": "0.1.0",
-  "description": "Blender 3D in the browser (linuxserver/blender over KasmVNC), with a persistent /config so scenes, preferences and add-ons survive container recreates — plus the aw-blender MCP, which drives the running Blender from an agent session (scene inspection, arbitrary bpy execution, viewport screenshots, Poly Haven / Sketchfab / Hyper3D / Hunyuan3D asset providers). Ported as-is from the agentic-workspace monolith's aw-custom-blender docker service + aw-blender MCP.",
+  "version": "0.2.0",
+  "description": "Blender 3D in the browser (linuxserver/blender over KasmVNC), with a persistent /config so scenes, preferences and add-ons survive container recreates \u2014 plus the aw-blender MCP, which drives the running Blender from an agent session (scene inspection, arbitrary bpy execution, viewport screenshots, Poly Haven / Sketchfab / Hyper3D / Hunyuan3D asset providers). Ported as-is from the agentic-workspace monolith's aw-custom-blender docker service + aw-blender MCP.",
   "icon": "bolt",
   "tier": "container",
   "requires_ui_refresh": true,
@@ -37,7 +37,7 @@
         "source": "$AW_APP_DATA",
         "target": "/config",
         "mode": "rw",
-        "reason": "Blender's HOME inside the image: user preferences, installed add-ons (notably the BlenderMCP add-on the aw-blender MCP talks to), and any .blend saved from the session. The monolith bound ./data/blender-config here for the same reason — without it every container recreate (app update, workspace redeploy) resets Blender to a fresh install and the MCP add-on has to be re-installed by hand."
+        "reason": "Blender's HOME inside the image: user preferences, installed add-ons (notably the BlenderMCP add-on the aw-blender MCP talks to), and any .blend saved from the session. The monolith bound ./data/blender-config here for the same reason \u2014 without it every container recreate (app update, workspace redeploy) resets Blender to a fresh install and the MCP add-on has to be re-installed by hand."
       }
     ]
   },
@@ -62,7 +62,7 @@
       {
         "id": "aw-blender",
         "path": "skills/aw-blender/SKILL.md",
-        "description": "Drive the workspace's headless-GUI Blender from an agent session over the aw-blender MCP — add-on setup, the tool surface, and the hard-won pipeline lessons (getting files out of the container, baking transforms before export, per-call exec scope)."
+        "description": "Drive the workspace's headless-GUI Blender from an agent session over the aw-blender MCP \u2014 add-on setup, the tool surface, and the hard-won pipeline lessons (getting files out of the container, baking transforms before export, per-call exec scope)."
       }
     ]
   },
