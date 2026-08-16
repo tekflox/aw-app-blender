@@ -12,7 +12,8 @@
       "env": {
         "PYTHONUNBUFFERED": "1",
         "BLENDER_HOST": "aw-app-blender",
-        "BLENDER_PORT": "9876"
+        "BLENDER_PORT": "9876",
+        "AW_BLENDER_DATA_DIR": "/opt/aw-workspace/.aw-workspace/data/blender"
       }
     }
   }

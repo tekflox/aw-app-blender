@@ -47,7 +47,10 @@ Core:
 - **`get_scene_info`** — always start here. Objects, collections, the lot.
 - **`get_object_info(object_name)`** — one object's transform, mesh stats, materials.
 - **`execute_blender_code(code)`** — arbitrary `bpy`. Returns whatever the code *printed*.
-- **`get_viewport_screenshot(max_size=800)`** — returns the viewport as an image.
+- **`get_viewport_screenshot(max_size=800, inline=false, filename=…)`** —
+  writes a PNG into the shared volume and returns its **path**. Pass
+  `inline=true` only when you actually need to look at the render this turn;
+  an inline image costs context tokens on every single call.
 
 Asset providers (each gated on its toggle in the add-on sidebar — check with
 `get_polyhaven_status` / `get_sketchfab_status` / `get_hyper3d_status` /
@@ -78,28 +81,38 @@ custom property, a file). This is why a background thread started in one call
 can't be shut down from a later one — do the whole start/use/stop cycle
 inside a single call, or accept it lingers.
 
-### 2. Getting files *out* of Blender's container
+### 2. Getting files *out* of Blender's container — write them to `/config`
 
-There is no shared volume between the MCP process and Blender, and no
-file-download tool. What works: serve the file over HTTP from inside Blender
-and fetch it from wherever you're working —
+**Have Blender write to `/config/…`, not `/tmp`.** That directory is this
+app's `$AW_APP_DATA` volume, which lives on the workspace tree — so the file
+appears, same bytes, at:
 
-```python
-# inside ONE execute_blender_code call
-import http.server, socketserver, threading, os
-os.chdir('/tmp')
-httpd = socketserver.TCPServer(('0.0.0.0', 8099), http.server.SimpleHTTPRequestHandler)
-threading.Thread(target=httpd.serve_forever, daemon=True).start()
-print('serving /tmp on 8099')
+```
+inside Blender:   /config/aw-out/hero.fbx
+from a session:   /opt/aw-workspace/.aw-workspace/data/blender/aw-out/hero.fbx
 ```
 
-then `curl http://aw-app-blender:8099/<file>` from a container on the
-workspace's podman network. Remember trap #1: you cannot call
-`httpd.shutdown()` from a later call.
+Anything written to `/tmp` inside the container, by contrast, is invisible
+everywhere else and dies with the container. So:
 
-For small payloads, skip the server entirely and base64 the bytes back
-through `print()` — that is exactly how `get_viewport_screenshot` in this
-app's MCP returns an image without any mount at all.
+```python
+import os
+os.makedirs('/config/aw-out', exist_ok=True)
+bpy.ops.export_scene.fbx(filepath='/config/aw-out/hero.fbx', use_selection=True)
+```
+
+…then just read the workspace path. `get_viewport_screenshot` works exactly
+this way, which is why it returns a path instead of image bytes.
+
+The container writes as PUID 1000 with a normal umask, so files land
+group/world-readable — an agent session reads them without any permission
+dance. Writing *into* that tree from the session side is the direction that
+needs care.
+
+> Older notes describe serving files out with an ad-hoc `http.server` inside
+> `execute_blender_code` and `curl`-ing `aw-app-blender:<port>`. That was the
+> monolith's workaround for having no shared volume at all. It still works,
+> but it is no longer necessary — prefer `/config`.
 
 ### 3. Exporting a mesh: bake world transforms first
 
@@ -153,5 +166,6 @@ sessions too.
 - Upstream's telemetry (which phoned home per tool call, with prompt text
   and screenshots) is not in this port at all.
 - `get_viewport_screenshot` upstream read the PNG off the local filesystem
-  and so never worked across containers. Here it comes back base64 over the
-  command channel.
+  and so never worked across containers. Here it writes into the shared
+  `/config` volume and returns the path — the caller decides whether the
+  image is worth pulling into context (`inline=true`).

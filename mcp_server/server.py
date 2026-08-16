@@ -55,6 +55,24 @@ SOCKET_TIMEOUT = 180.0
 SERVER_NAME = "aw-blender"
 SERVER_VERSION = "1.8.0"
 
+# Where tools park files they produce, INSIDE the Blender container. This is
+# the app's `$AW_APP_DATA` volume (aw-app.json), i.e. the same bytes the
+# workspace sees under WORKSPACE_DATA_DIR — which is what makes returning a
+# path instead of inline image data work at all.
+CONTAINER_OUT_DIR = "/config/aw-out"
+
+# The workspace-side path of that same volume. An agent session sees the
+# workspace tree, so this is the path IT can open. Note this process (running
+# in the gateway container) generally CANNOT — it doesn't mount the Blender
+# app's data. That's fine: for the default path-returning mode nothing here
+# ever touches the file, it only names it.
+WORKSPACE_DATA_DIR = os.environ.get(
+    "AW_BLENDER_DATA_DIR", "/opt/aw-workspace/.aw-workspace/data/blender"
+)
+
+_out_dir_ready = False
+_file_counter = 0
+
 
 class BlenderError(Exception):
     """An error the add-on reported, or a failure reaching it."""
@@ -245,11 +263,25 @@ TOOLS: list[dict] = [
     {
         "name": "get_viewport_screenshot",
         "description": (
-            "Capture the current Blender 3D viewport and return it as an image. "
-            "Requires a GUI Blender session (this app's container provides one)."
+            "Capture the current Blender 3D viewport to a PNG on the shared "
+            "workspace filesystem and return its path — no image data in the "
+            "response, so it costs nothing to call when you just want the file. "
+            "Set inline=true to get the image back in the response as well, for "
+            "when you're actually iterating on what the camera sees. Requires a "
+            "GUI Blender session (this app's container provides one)."
         ),
         "inputSchema": _obj(
-            {"max_size": dict(_INT, description="Largest dimension in pixels. Default 800.")}
+            {
+                "max_size": dict(_INT, description="Largest dimension in pixels. Default 800."),
+                "inline": {
+                    "type": "boolean",
+                    "description": (
+                        "Also return the image in the response. Default false — "
+                        "an inline image costs context tokens on every call."
+                    ),
+                },
+                "filename": dict(_STR, description="Optional output file name. Defaults to a unique one."),
+            }
         ),
     },
     {
@@ -424,39 +456,96 @@ def _require_polyhaven(conn: BlenderConnection) -> str | None:
     return None
 
 
-def _screenshot(conn: BlenderConnection, max_size: int) -> dict:
-    """Capture the viewport and pull the bytes back over the same socket.
+def _safe_name(filename: str | None) -> str | None:
+    """Reduce a caller-supplied name to a single safe path segment."""
+    if not filename:
+        return None
+    name = os.path.basename(str(filename)).strip()
+    if not name or name in (".", ".."):
+        return None
+    if not name.lower().endswith(".png"):
+        name += ".png"
+    return name
+
+
+def _ensure_out_dir(conn: BlenderConnection) -> None:
+    global _out_dir_ready
+    if _out_dir_ready:
+        return
+    conn.send_command("execute_code", {
+        "code": f"import os\nos.makedirs({CONTAINER_OUT_DIR!r}, exist_ok=True)\n"
+    })
+    _out_dir_ready = True
+
+
+def _screenshot(conn: BlenderConnection, max_size: int, inline: bool,
+                filename: str | None) -> dict:
+    """Capture the viewport into the shared app-data volume; return its path.
 
     Upstream writes the PNG to ``tempfile.gettempdir()`` and then opens that
-    path locally — which only works when the MCP process and Blender share a
-    filesystem. They did not in the monolith (the KB's Naruto note records
-    working around exactly this with an ad-hoc ``http.server`` inside
-    ``execute_blender_code``) and they do not here either: this runs in the
-    gateway container, Blender runs in its own. So the file is written inside
-    Blender's container and read back base64 over the command channel we
-    already have, which needs no extra mount, port, or provider.
+    path locally, which only works when the MCP process and Blender share a
+    filesystem — they don't (this runs in the gateway container). But the
+    *agent* and Blender do: this app's ``$AW_APP_DATA`` volume is mounted at
+    ``/config`` in the container and lives on the workspace tree, which every
+    agent session can read. So the file is written there and the caller gets
+    a path it can open on its own terms.
+
+    Returning a path rather than inline image data is deliberate: an inline
+    image costs context tokens on EVERY call, including the many where the
+    caller only wanted the file. ``inline=True`` opts back in for the case
+    where you're genuinely iterating on what the camera sees — that path
+    still has to come back base64 over the command channel, because this
+    process cannot read the volume itself.
     """
-    remote = "/tmp/aw_blender_viewport.png"
+    _ensure_out_dir(conn)
+    global _file_counter
+    _file_counter += 1
+    name = _safe_name(filename) or f"viewport-{os.getpid()}-{_file_counter}.png"
+    container_path = f"{CONTAINER_OUT_DIR}/{name}"
+    workspace_path = os.path.join(WORKSPACE_DATA_DIR, os.path.basename(CONTAINER_OUT_DIR), name)
+
     conn.send_command(
         "get_viewport_screenshot",
-        {"max_size": max_size, "filepath": remote, "format": "png"},
+        {"max_size": max_size, "filepath": container_path, "format": "png"},
     )
-    result = conn.send_command(
-        "execute_code",
-        {
-            "code": (
-                "import base64, os\n"
-                f"p = {remote!r}\n"
-                "print(base64.b64encode(open(p, 'rb').read()).decode() if os.path.exists(p) else '')\n"
-            )
-        },
-    )
+
+    # Confirm it landed rather than handing back a path to nothing — the
+    # add-on reports success even when there's no 3D viewport to capture.
+    probe = conn.send_command("execute_code", {
+        "code": (
+            "import os\n"
+            f"p = {container_path!r}\n"
+            "print(os.path.getsize(p) if os.path.exists(p) else 0)\n"
+        )
+    })
+    try:
+        size = int(str(probe.get("result", "0")).strip() or 0)
+    except ValueError:
+        size = 0
+    if not size:
+        raise BlenderError(
+            "the viewport screenshot was never written — the add-on needs a "
+            "GUI session with a 3D viewport open"
+        )
+
+    if not inline:
+        return _text(
+            f"Viewport captured ({size} bytes).\n"
+            f"Path (workspace): {workspace_path}\n"
+            f"Path (inside Blender): {container_path}\n"
+            "Open it with a file read if you need to look at it; pass "
+            "inline=true to get the image back in the response instead."
+        )
+
+    result = conn.send_command("execute_code", {
+        "code": (
+            "import base64\n"
+            f"print(base64.b64encode(open({container_path!r}, 'rb').read()).decode())\n"
+        )
+    })
     encoded = str(result.get("result", "")).strip()
     if not encoded:
-        raise BlenderError(
-            "the viewport screenshot file was never created inside Blender — "
-            "the add-on needs a GUI session with a 3D viewport open"
-        )
+        raise BlenderError(f"could not read the screenshot back from {container_path}")
     try:
         return _image(base64.b64decode(encoded))
     except (ValueError, TypeError) as exc:
@@ -477,7 +566,8 @@ def call_tool(name: str, args: dict) -> dict:
         return _text(f"Code executed successfully: {result.get('result', '')}")
 
     if name == "get_viewport_screenshot":
-        return _screenshot(conn, int(args.get("max_size") or 800))
+        return _screenshot(conn, int(args.get("max_size") or 800),
+                           bool(args.get("inline", False)), args.get("filename"))
 
     if name in ("get_polyhaven_status", "get_hyper3d_status", "get_sketchfab_status",
                 "get_hunyuan3d_status"):

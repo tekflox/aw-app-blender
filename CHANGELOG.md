@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0
+
+- `get_viewport_screenshot` now writes into `/config/aw-out/` and returns the
+  **path** (both the in-container one and the workspace-side one) instead of
+  inline image data. An inline image cost context tokens on every call, even
+  when the caller only wanted the file. `inline=true` opts back in for when
+  you're iterating on a render; `filename` names the output.
+- Verifies the capture actually landed before handing back a path, so a
+  Blender session with no 3D viewport reports an error rather than a path to
+  nothing.
+- Skill/README: `/config` is the shared `$AW_APP_DATA` volume, so **any** file
+  Blender writes there is readable from the workspace tree. The old
+  `http.server` file-extraction workaround is documented as unnecessary.
+
 ## 0.1.0
 
 Initial port of the monolith's Blender integration into a decoupled app.

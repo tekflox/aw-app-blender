@@ -53,10 +53,18 @@ differences from upstream:
 
 - **No telemetry.** Upstream phones home per tool call with prompt text and
   uploaded screenshots. Not carried over.
-- **`get_viewport_screenshot` actually works across containers.** Upstream
-  has the add-on write a PNG and then reads that path locally, which only
-  works when both share a filesystem — they didn't in the monolith either.
-  Here the bytes come back base64 over the command channel.
+- **`get_viewport_screenshot` returns a path, not an image.** Upstream has
+  the add-on write a PNG and then reads that path locally, which only works
+  when both share a filesystem — they didn't in the monolith either. Here it
+  writes into `/config/aw-out/` (this app's `$AW_APP_DATA` volume, which the
+  workspace tree also sees) and hands back the path. An inline image costs
+  context tokens on every call, including the many where the caller only
+  wanted the file; `inline=true` opts back in when you're genuinely
+  iterating on a render.
+
+  The same trick is the answer for *any* file Blender produces: write it to
+  `/config/…` and it shows up under
+  `/opt/aw-workspace/.aw-workspace/data/blender/…`.
 
 ## Development
 

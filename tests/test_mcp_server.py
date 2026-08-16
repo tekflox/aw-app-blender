@@ -62,6 +62,8 @@ def conn(monkeypatch):
 
     yield _make
     server._connection = None
+    server._out_dir_ready = False
+    server._file_counter = 0
 
 
 def _call(name: str, args: dict | None = None) -> dict:
@@ -128,28 +130,77 @@ def test_addon_error_becomes_an_error_result_not_an_exception(conn):
     assert "no such object" in out["content"][0]["text"]
 
 
-def test_screenshot_comes_back_base64_over_the_command_channel(conn):
-    png = b"\x89PNG\r\n\x1a\nfake"
-    import base64 as b64
+def test_screenshot_returns_a_workspace_path_and_no_image_by_default(conn):
     sock = conn([
-        {"status": "success", "result": {}},                                  # capture
+        {"status": "success", "result": {}},                    # makedirs
+        {"status": "success", "result": {}},                    # capture
+        {"status": "success", "result": {"result": "1234"}},    # size probe
+    ])
+    out = _call("get_viewport_screenshot", {"max_size": 400, "filename": "shot"})
+    # The whole point of the default: no image content, so calling this costs
+    # the caller nothing in context when it only wanted the file.
+    assert out["content"][0]["type"] == "text"
+    assert not any(c["type"] == "image" for c in out["content"])
+    assert "/config/aw-out/shot.png" in out["content"][0]["text"]
+    assert f"{server.WORKSPACE_DATA_DIR}/aw-out/shot.png" in out["content"][0]["text"]
+    # ...and it wrote into the shared volume, not the container's own /tmp.
+    capture = next(m for m in sock.sent if m["type"] == "get_viewport_screenshot")
+    assert capture["params"]["filepath"] == "/config/aw-out/shot.png"
+    assert capture["params"]["max_size"] == 400
+    assert len(sock.sent) == 3, "must not fetch the bytes when inline is off"
+
+
+def test_screenshot_inline_opt_in_also_returns_the_image(conn):
+    import base64 as b64
+    png = b"\x89PNG\r\n\x1a\nfake"
+    sock = conn([
+        {"status": "success", "result": {}},                                       # makedirs
+        {"status": "success", "result": {}},                                       # capture
+        {"status": "success", "result": {"result": "9"}},                          # size probe
         {"status": "success", "result": {"result": b64.b64encode(png).decode()}},  # read back
     ])
-    out = _call("get_viewport_screenshot", {"max_size": 400})
-    assert sock.sent[0]["params"]["max_size"] == 400
-    assert sock.sent[1]["type"] == "execute_code"
+    out = _call("get_viewport_screenshot", {"inline": True})
     assert out["content"][0]["type"] == "image"
     assert b64.b64decode(out["content"][0]["data"]) == png
+    assert len(sock.sent) == 4
 
 
-def test_screenshot_missing_file_is_a_clear_error(conn):
+def test_screenshot_that_never_landed_is_an_error_not_a_dangling_path(conn):
     conn([
-        {"status": "success", "result": {}},
-        {"status": "success", "result": {"result": ""}},
+        {"status": "success", "result": {}},                  # makedirs
+        {"status": "success", "result": {}},                  # capture "succeeds"
+        {"status": "success", "result": {"result": "0"}},     # ...but nothing on disk
     ])
     out = _call("get_viewport_screenshot")
     assert out["isError"] is True
     assert "GUI" in out["content"][0]["text"]
+
+
+def test_screenshot_filenames_do_not_escape_the_output_dir(conn):
+    sock = conn([
+        {"status": "success", "result": {}},
+        {"status": "success", "result": {}},
+        {"status": "success", "result": {"result": "10"}},
+    ])
+    _call("get_viewport_screenshot", {"filename": "../../etc/passwd"})
+    capture = next(m for m in sock.sent if m["type"] == "get_viewport_screenshot")
+    assert capture["params"]["filepath"] == "/config/aw-out/passwd.png"
+
+
+def test_the_output_dir_is_only_created_once_per_process(conn):
+    sock = conn([{"status": "success", "result": {"result": "5"}}] * 10)
+    _call("get_viewport_screenshot")
+    _call("get_viewport_screenshot")
+    makedirs = [m for m in sock.sent if m["type"] == "execute_code" and "makedirs" in m["params"]["code"]]
+    assert len(makedirs) == 1
+
+
+def test_successive_screenshots_do_not_clobber_each_other(conn):
+    sock = conn([{"status": "success", "result": {"result": "5"}}] * 10)
+    _call("get_viewport_screenshot")
+    _call("get_viewport_screenshot")
+    paths = [m["params"]["filepath"] for m in sock.sent if m["type"] == "get_viewport_screenshot"]
+    assert len(paths) == 2 and paths[0] != paths[1]
 
 
 def test_polyhaven_tools_refuse_early_when_the_integration_is_off(conn):
