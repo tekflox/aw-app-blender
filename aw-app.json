@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "id": "blender",
   "name": "Blender",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Blender 3D in the browser (linuxserver/blender over KasmVNC), with a persistent /config so scenes, preferences and add-ons survive container recreates \u2014 plus the aw-blender MCP, which drives the running Blender from an agent session (scene inspection, arbitrary bpy execution, viewport screenshots, Poly Haven / Sketchfab / Hyper3D / Hunyuan3D asset providers). Ported as-is from the agentic-workspace monolith's aw-custom-blender docker service + aw-blender MCP.",
   "icon": "bolt",
   "tier": "container",
