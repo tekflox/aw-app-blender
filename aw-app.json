@@ -28,8 +28,8 @@
       "CUSTOM_PORT": "3010",
       "CUSTOM_HTTPS_PORT": "3011",
       "CUSTOM_WS_PORT": "8092",
-      "PUID": "1000",
-      "PGID": "1000",
+      "PUID": "${data.uid}",
+      "PGID": "${data.gid}",
       "TZ": "Etc/UTC"
     },
     "volumes": [
